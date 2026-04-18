@@ -1,0 +1,39 @@
+# Version control
+.git
+.gitignore
+.gitleaks.toml
+
+# Dependencies
+node_modules
+
+# Build output
+dist
+
+# Environment files
+.env
+.env.*
+
+# Development and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+._*
+
+# Pre-commit config
+.pre-commit-config.yaml
+
+# Documentation
+*.md
+LICENSE
+
+# Python
+.venv/
+
+# Claude Code
+.claude/
+CLAUDE.md
+.claudeignore

@@ -1,0 +1,153 @@
+/* CSS Design System for go-tasks-ui */
+
+/* Light theme (default) */
+:root {
+  /* Background levels */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9fafb;
+  --bg-tertiary: #f3f4f6;
+
+  /* Text levels */
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+
+  /* Border levels */
+  --border-primary: #e5e7eb;
+  --border-secondary: #d1d5db;
+  --border-tertiary: #9ca3af;
+
+  /* Accent colours (applied dynamically from preferences store) */
+  --accent: #2196f3;
+  --accent-dark: #1976d2;
+  --accent-light: #64b5f6;
+
+  /* Danger colours */
+  --danger: #dc2626;
+  --danger-light: #fef2f2;
+  --danger-border: #fecaca;
+
+  /* Typography */
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+
+  /* Font rendering */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Dark theme */
+[data-theme='dark'] {
+  /* Background levels */
+  --bg-primary: #111827;
+  --bg-secondary: #1f2937;
+  --bg-tertiary: #374151;
+
+  /* Text levels */
+  --text-primary: #f9fafb;
+  --text-secondary: #d1d5db;
+  --text-tertiary: #9ca3af;
+
+  /* Border levels */
+  --border-primary: #374151;
+  --border-secondary: #4b5563;
+  --border-tertiary: #6b7280;
+
+  /* Danger colours */
+  --danger: #f87171;
+  --danger-light: #450a0a;
+  --danger-border: #7f1d1d;
+}
+
+/* Sepia theme */
+[data-theme='sepia'] {
+  --bg-primary: #f4efe6;
+  --bg-secondary: #ede4d3;
+  --bg-tertiary: #e4d8c0;
+
+  --text-primary: #3b2f1e;
+  --text-secondary: #6b5740;
+  --text-tertiary: #9c8066;
+
+  --border-primary: #d4c4a8;
+  --border-secondary: #c4b090;
+  --border-tertiary: #b09c78;
+
+  /* Danger colours */
+  --danger: #b91c1c;
+  --danger-light: #fef2f2;
+  --danger-border: #e8c4b8;
+}
+
+/* Minimal reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+ul,
+ol {
+  list-style: none;
+  padding: 0;
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Utility classes */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.ml-auto {
+  margin-left: auto;
+}
