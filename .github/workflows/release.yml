@@ -147,6 +147,10 @@ jobs:
             --predicate image.sbom.spdx.json \
             "${IMAGE}@${DIGEST}"
 
+      - name: Copy SBOM for release upload
+        run: |
+          cp image.sbom.spdx.json go-tasks-ui-${{ steps.bundle.outputs.version }}.image.sbom.spdx.json
+
       - name: Compute SLSA subjects for tarball
         id: hashes
         run: |
@@ -163,12 +167,37 @@ jobs:
           fi
           echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
 
+      - name: Generate checksums
+        run: |
+          sha256sum ${{ steps.bundle.outputs.tarball }} > checksums.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: ${{ steps.bundle.outputs.tarball }}
-          generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ${{ steps.bundle.outputs.tarball }}
+            checksums.txt
+            go-tasks-ui-${{ steps.bundle.outputs.version }}.image.sbom.spdx.json
+          body: |
+            ## go-tasks-ui ${{ github.ref_name }}
+
+            **Container image (recommended):** `ghcr.io/sud0x0/go-tasks-ui:${{ steps.bundle.outputs.version }}` — multi-arch (`linux/amd64`, `linux/arm64`).
+
+            Static bundle is attached below.
+
+            ## Run the container
+
+            ```bash
+            docker pull ghcr.io/sud0x0/go-tasks-ui:${{ steps.bundle.outputs.version }}
+            docker run --rm -p 3000:80 \
+                -e API_UPSTREAM=your-api-host:8080 \
+                ghcr.io/sud0x0/go-tasks-ui:${{ steps.bundle.outputs.version }}
+            ```
+
+            See the [README](https://github.com/sud0x0/go-tasks-ui#getting-started) for required environment variables.
+
+            Verify the bundle download with `sha256sum -c checksums.txt`.
 
   # ============================================================================
   # binary-provenance: SLSA Level 3 provenance for the tarball, attached to the
