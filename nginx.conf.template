@@ -10,11 +10,17 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # DNS resolver populated at container start from /etc/resolv.conf so the
+    # `set $upstream` pattern below can resolve names on each request — meaning
+    # nginx will start even if the backend isn't up yet.
+    resolver ${RESOLVERS} valid=30s ipv6=off;
+
     # Proxy API and health through to the backend service.
-    # Resolve the upstream name at runtime via an environment variable baked into
-    # the image, defaulting to the docker-compose service name.
+    # ${API_UPSTREAM} is rendered at container start by docker-entrypoint.d/00-render-app-conf.sh.
+    # Override with -e API_UPSTREAM=host:port at runtime; defaults to api:8080.
     location /api/ {
-        proxy_pass       http://api:8080;
+        set $upstream "${API_UPSTREAM}";
+        proxy_pass       http://$upstream$request_uri;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -22,7 +28,8 @@ server {
     }
 
     location = /health {
-        proxy_pass       http://api:8080/health;
+        set $upstream "${API_UPSTREAM}";
+        proxy_pass       http://$upstream/health;
         proxy_set_header Host              $host;
     }
 

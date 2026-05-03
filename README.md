@@ -69,6 +69,8 @@ src/
     Today.svelte                — daily task execution view
     Tasks.svelte                — task management (CRUD)
     Categories.svelte           — category management
+    Logs.svelte                 — daily journal log entries
+    Answers.svelte              — historical task answers
     Charts.svelte               — analytics dashboard
 ```
 
@@ -176,8 +178,8 @@ Never commit `.env` — it is in `.gitignore`.
 ### Preferences
 
 - Three themes: light, dark, sepia
-- Eight accent colours: blue, green, red, orange, pink, purple, brown, black
-- Three font sizes: small, medium, large
+- Six accent colours: blue, green, red, orange, pink, purple
+- Three font sizes: medium, large, xlarge
 - All preferences persisted in localStorage
 
 ---
@@ -193,6 +195,8 @@ Client-side routing via a simple store. No URL history — state is managed in m
 | `today`      | Today.svelte      | Daily task execution (default after login) |
 | `tasks`      | Tasks.svelte      | Task CRUD interface                        |
 | `categories` | Categories.svelte | Category management                        |
+| `logs`       | Logs.svelte       | Daily journal log entries                  |
+| `answers`    | Answers.svelte    | Historical task answers                    |
 | `charts`     | Charts.svelte     | Analytics dashboard                        |
 
 Unauthenticated users are redirected to `login`. After login, users land on `today`.

@@ -5,8 +5,12 @@
 
 COMPOSE_FILE=compose.dev.yaml
 APP_CONTAINER=app_ui
+PROD_IMAGE=go-tasks-ui:latest
+PROD_PORT?=3000
+API_UPSTREAM?=api:8080
 
 .PHONY: setup install build run stop logs destroy clean \
+        prod-build prod-run prod-bundle \
         lint fmt check \
         pre-commit-install pre-commit-run semgrep socket \
         help
@@ -81,12 +85,45 @@ destroy:
 	@podman image prune -f
 	@echo "Cleanup complete."
 
-# Delete all temp, build, and dist folders
+# Delete all temp, build, and dist folders, plus prod-build artefacts
+# (the production image and any tarballs from prod-bundle).
 clean:
 	@echo "Cleaning temp, build, and dist artifacts..."
 	@rm -rf node_modules/ dist/ .svelte-kit/
 	@rm -rf .env
+	@rm -f go-tasks-ui-*.tar.gz
+	@podman rmi -f $(PROD_IMAGE) 2>/dev/null || true
 	@echo "Clean complete."
+
+# ============================================================================
+# Production build
+# ============================================================================
+
+# Type-check, then build the production container image (multi-stage,
+# nginx-served static bundle). Image tag: $(PROD_IMAGE).
+prod-build:
+	@echo "Type-checking..."
+	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
+	@echo "Building production container image: $(PROD_IMAGE)"
+	@podman build -f container.prod -t $(PROD_IMAGE) .
+	@echo "Done. Run 'make prod-run' to start it."
+
+# Run the production image locally on $(PROD_PORT). Override the backend with
+# API_UPSTREAM=host:port on the make command line.
+prod-run:
+	@echo "Starting $(PROD_IMAGE) on http://localhost:$(PROD_PORT) (API_UPSTREAM=$(API_UPSTREAM))"
+	@podman run --rm -p $(PROD_PORT):80 -e API_UPSTREAM=$(API_UPSTREAM) $(PROD_IMAGE)
+
+# Build the static asset bundle only (no container) and tar it. Useful for
+# release artefacts when consumers want to bring their own web server.
+prod-bundle:
+	@echo "Building static bundle..."
+	@pnpm install --frozen-lockfile
+	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
+	@pnpm build
+	@VERSION=$$(node -p "require('./package.json').version"); \
+	tar -czf go-tasks-ui-$$VERSION.tar.gz -C dist . && \
+	echo "Bundle: go-tasks-ui-$$VERSION.tar.gz"
 
 # ============================================================================
 # Code quality
@@ -134,6 +171,13 @@ help:
 	@echo "  logs             View application logs"
 	@echo "  destroy          Destroy all containers, volumes, and images"
 	@echo "  clean            Delete all temp, build, and dist folders"
+	@echo ""
+	@echo "Production"
+	@echo "----------"
+	@echo "  prod-build       Type-check + build production container image (\$$PROD_IMAGE)"
+	@echo "  prod-run         Run the production image on \$$PROD_PORT (default 3000)"
+	@echo "                     Override backend: make prod-run API_UPSTREAM=my-api:8080"
+	@echo "  prod-bundle      Build a static-asset tarball (go-tasks-ui-<version>.tar.gz)"
 	@echo ""
 	@echo "Code Quality"
 	@echo "------------"

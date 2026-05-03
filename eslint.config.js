@@ -24,6 +24,7 @@ export default [
     },
     rules: {
       ...ts.configs.recommended.rules,
+      'no-unused-vars': 'off', // disabled in favour of the TS-aware variant
       '@typescript-eslint/no-unused-vars': 'warn',
       '@typescript-eslint/no-explicit-any': 'error',
       'no-undef': 'off', // TypeScript handles this
@@ -46,6 +47,7 @@ export default [
     },
     rules: {
       ...svelte.configs.recommended.rules,
+      'no-unused-vars': 'off', // disabled in favour of the TS-aware variant
       '@typescript-eslint/no-unused-vars': 'warn',
       '@typescript-eslint/no-explicit-any': 'error',
     },

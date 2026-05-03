@@ -71,10 +71,16 @@ async function refreshTokenIfNeeded(): Promise<boolean> {
 }
 
 export async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  // Proactive refresh if token is expiring soon
+  // Proactive refresh if token is expiring soon. If refresh fails, the auth
+  // store has already been cleared — bail now rather than firing a doomed
+  // request with no Authorization header that will just 401.
   const token = get(accessToken)
   if (token && isTokenExpiringSoon()) {
-    await refreshTokenIfNeeded()
+    const refreshed = await refreshTokenIfNeeded()
+    if (!refreshed) {
+      const error: ApiError = { error: 'Authentication failed' }
+      throw error
+    }
   }
 
   const currentToken = get(accessToken)
