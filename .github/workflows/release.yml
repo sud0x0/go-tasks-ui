@@ -5,25 +5,39 @@ on:
     tags:
       - 'v*'
 
+# Workflow-level default: read-only. Each job escalates only what it needs.
 permissions:
-  contents: write # create the GitHub Release + upload assets
-  packages: write # push the container image to ghcr.io
+  contents: read
 
 jobs:
+  # ============================================================================
+  # release: build static bundle + multi-arch container, sign image, attest SBOM,
+  # publish GitHub Release, and emit subjects for SLSA provenance.
+  # ============================================================================
   release:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write # create the GitHub Release + upload tarball
+      packages: write # push the container image to ghcr.io
+      id-token: write # cosign keyless signing via the OIDC token
+
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+      image: ${{ steps.image-info.outputs.image }}
+      digest: ${{ steps.image-info.outputs.digest }}
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
@@ -40,6 +54,7 @@ jobs:
       - name: Package static bundle
         id: bundle
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           TARBALL="go-tasks-ui-${VERSION}.tar.gz"
           tar -czf "$TARBALL" -C dist .
@@ -48,11 +63,14 @@ jobs:
             echo "tarball=$TARBALL"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -60,7 +78,7 @@ jobs:
 
       - name: Derive image tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -69,19 +87,118 @@ jobs:
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and push container
-        uses: docker/build-push-action@v6
+        id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: container.prod
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.1
+        with:
+          cosign-release: 'v3.0.6'
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.22.0
+
+      - name: Resolve image and digest
+        id: image-info
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error title=Missing digest::build-push-action did not return a digest output. Cosign signing and SLSA container provenance both require it."
+            exit 1
+          fi
+          if [ -z "$IMAGE" ]; then
+            echo "::error title=Missing image::failed to derive image name from GITHUB_REPOSITORY"
+            exit 1
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Sign container image
+        env:
+          IMAGE: ${{ steps.image-info.outputs.image }}
+          DIGEST: ${{ steps.image-info.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Generate image SBOM
+        env:
+          IMAGE: ${{ steps.image-info.outputs.image }}
+          DIGEST: ${{ steps.image-info.outputs.digest }}
+        run: |
+          syft "${IMAGE}@${DIGEST}" -o spdx-json=image.sbom.spdx.json
+
+      - name: Attest SBOM
+        env:
+          IMAGE: ${{ steps.image-info.outputs.image }}
+          DIGEST: ${{ steps.image-info.outputs.digest }}
+        run: |
+          cosign attest --yes --type spdxjson \
+            --predicate image.sbom.spdx.json \
+            "${IMAGE}@${DIGEST}"
+
+      - name: Compute SLSA subjects for tarball
+        id: hashes
+        run: |
+          set -euo pipefail
+          TARBALL="${{ steps.bundle.outputs.tarball }}"
+          if [ ! -f "$TARBALL" ]; then
+            echo "::error title=Tarball missing::expected $TARBALL but it does not exist on disk"
+            exit 1
+          fi
+          HASHES=$(sha256sum "$TARBALL" | base64 -w0)
+          if [ -z "$HASHES" ]; then
+            echo "::error title=Empty hashes::sha256sum produced no output for $TARBALL"
+            exit 1
+          fi
+          echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ steps.bundle.outputs.tarball }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # ============================================================================
+  # binary-provenance: SLSA Level 3 provenance for the tarball, attached to the
+  # GitHub Release as an additional asset.
+  # ============================================================================
+  binary-provenance:
+    needs: [release]
+    permissions:
+      actions: read # read workflow metadata for provenance
+      id-token: write # OIDC for SLSA generator signing
+      contents: write # upload provenance asset to the GitHub Release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true
+
+  # ============================================================================
+  # container-provenance: SLSA Level 3 provenance for the container image,
+  # pushed to the registry as an OCI attestation alongside the image.
+  # ============================================================================
+  container-provenance:
+    needs: [release]
+    permissions:
+      actions: read # read workflow metadata for provenance
+      id-token: write # OIDC for SLSA generator signing
+      packages: write # push provenance attestation to ghcr.io
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.release.outputs.image }}
+      digest: ${{ needs.release.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
