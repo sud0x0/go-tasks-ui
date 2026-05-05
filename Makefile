@@ -5,21 +5,38 @@
 
 COMPOSE_FILE=compose.dev.yaml
 APP_CONTAINER=app_ui
-PROD_IMAGE=go-tasks-ui:latest
-PROD_PORT?=3000
-API_UPSTREAM?=api:8080
 
-.PHONY: setup install build run stop logs destroy clean \
-        prod-build prod-run prod-bundle \
+# --- Release artefact metadata --------------------------------------------
+#
+# Production releases are cut by pushing a `v*` tag — .github/workflows/release.yml
+# builds the static bundle, generates an SPDX-JSON SBOM with syft, computes
+# SHA-256 checksums, and publishes a tarball + SLSA Level 3 provenance.
+#
+# `make prod-bundle` reproduces the bundle locally (without the SBOM /
+# provenance steps); useful for smoke-testing the build before tagging.
+# `make release-check` runs the same syft + checksum steps the CI workflow
+# performs, so you can validate the full release pipeline before pushing a tag.
+VERSION ?= $(shell node -p "require('./package.json').version" 2>/dev/null || echo 0.0.0)
+# --------------------------------------------------------------------------
+
+.PHONY: setup install build prod-bundle release-check run stop logs destroy clean \
         lint fmt check \
         pre-commit-install pre-commit-run semgrep socket \
         help
+
+# `node_modules` is a real-file target so any rule that depends on it triggers
+# `pnpm install` the first time (or after `make clean`) without forcing it on
+# every invocation. Tracks the lockfile + package.json so dep changes refresh.
+node_modules: package.json pnpm-lock.yaml
+	@echo "Installing local dependencies..."
+	@pnpm install
+	@touch node_modules
 
 # ============================================================================
 # First-time setup
 # ============================================================================
 
-# Full first-time setup: copies .env, installs deps, installs pre-commit hooks, builds container
+# Full first-time setup: copies .env, installs deps, installs hooks, builds container
 setup:
 	@echo "Setting up development environment..."
 	@if [ ! -f .env ]; then \
@@ -34,10 +51,13 @@ setup:
 	@echo ""
 	@echo "Setup complete. Run 'make help' to see available commands."
 
-# Install pre-commit hooks and warm up cache
+# Install and warm up pre-commit hooks. The commit-msg hook is installed in
+# addition to the default pre-commit hook so Conventional Commits enforcement
+# kicks in on commit messages, not just staged files.
 pre-commit-install:
 	@echo "Installing pre-commit hooks..."
 	@pre-commit install
+	@pre-commit install --hook-type commit-msg
 	@echo "Pre-warming hook cache (downloads happen once per machine)..."
 	@pre-commit install --install-hooks
 	@echo "Pre-commit hooks installed."
@@ -51,7 +71,7 @@ install:
 	@echo "Installing local dependencies..."
 	@pnpm install
 
-# Build container and start (first time or after container changes)
+# Build dev container and start (first time or after container changes)
 build:
 	@echo "Building development container..."
 	@podman-compose -f $(COMPOSE_FILE) build
@@ -85,64 +105,82 @@ destroy:
 	@podman image prune -f
 	@echo "Cleanup complete."
 
-# Delete all temp, build, and dist folders, plus prod-build artefacts
-# (the production image and any tarballs from prod-bundle).
+# Delete all temp, build, and release artefacts.
 clean:
-	@echo "Cleaning temp, build, and dist artifacts..."
+	@echo "Cleaning temp, build, and release artifacts..."
 	@rm -rf node_modules/ dist/ .svelte-kit/
+	@rm -rf go-tasks-ui-*/ go-tasks-ui-*.tar.gz
+	@rm -f *.sbom.json checksums.txt
 	@rm -rf .env
-	@rm -f go-tasks-ui-*.tar.gz
-	@podman rmi -f $(PROD_IMAGE) 2>/dev/null || true
 	@echo "Clean complete."
 
 # ============================================================================
-# Production build
+# Production bundle
 # ============================================================================
 
-# Type-check, then build the production container image (multi-stage,
-# nginx-served static bundle). Image tag: $(PROD_IMAGE).
-prod-build:
-	@echo "Type-checking..."
-	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
-	@echo "Building production container image: $(PROD_IMAGE)"
-	@podman build -f container.prod -t $(PROD_IMAGE) .
-	@echo "Done. Run 'make prod-run' to start it."
-
-# Run the production image locally on $(PROD_PORT). Override the backend with
-# API_UPSTREAM=host:port on the make command line.
-prod-run:
-	@echo "Starting $(PROD_IMAGE) on http://localhost:$(PROD_PORT) (API_UPSTREAM=$(API_UPSTREAM))"
-	@podman run --rm -p $(PROD_PORT):80 -e API_UPSTREAM=$(API_UPSTREAM) $(PROD_IMAGE)
-
-# Build the static asset bundle only (no container) and tar it. Useful for
-# release artefacts when consumers want to bring their own web server.
+# Build the static asset bundle and tar it together with the Caddyfile, so the
+# tarball is drop-in deployable. This is what the GitHub Actions release
+# workflow ships on a tagged release; running it locally is for smoke-testing.
 prod-bundle:
-	@echo "Building static bundle..."
+	@echo "Building static bundle for v$(VERSION)..."
 	@pnpm install --frozen-lockfile
 	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
 	@pnpm build
-	@VERSION=$$(node -p "require('./package.json').version"); \
-	tar -czf go-tasks-ui-$$VERSION.tar.gz -C dist . && \
-	echo "Bundle: go-tasks-ui-$$VERSION.tar.gz"
+	@STAGE=go-tasks-ui-$(VERSION); \
+	rm -rf "$$STAGE" "$$STAGE.tar.gz"; \
+	mkdir -p "$$STAGE/dist"; \
+	cp -R dist/. "$$STAGE/dist/"; \
+	cp Caddyfile "$$STAGE/"; \
+	tar -czf "$$STAGE.tar.gz" "$$STAGE"; \
+	rm -rf "$$STAGE"; \
+	echo ""; \
+	echo "Bundle: $$STAGE.tar.gz"
+
+# Validate the release pipeline end-to-end against a local snapshot. Mirrors
+# the steps in .github/workflows/release.yml (build → tarball → SBOM →
+# checksums) so you can catch issues before pushing a tag. Requires syft.
+release-check:
+	@command -v syft >/dev/null 2>&1 || { \
+		echo "syft not found. Install: https://github.com/anchore/syft#installation"; \
+		exit 1; \
+	}
+	@echo "==> Building release bundle..."
+	@$(MAKE) prod-bundle VERSION=$(VERSION)
+	@echo ""
+	@echo "==> Generating SBOM..."
+	@syft scan dir:. \
+		--source-name "go-tasks-ui" \
+		--source-version "$(VERSION)" \
+		-o spdx-json=go-tasks-ui-$(VERSION).sbom.json
+	@echo ""
+	@echo "==> Computing checksums..."
+	@sha256sum \
+		go-tasks-ui-$(VERSION).tar.gz \
+		go-tasks-ui-$(VERSION).sbom.json \
+		> checksums.txt
+	@cat checksums.txt
+	@echo ""
+	@echo "All release-check steps passed. Safe to push a release tag."
 
 # ============================================================================
 # Code quality
 # ============================================================================
 
 # Run ESLint on TypeScript and Svelte files
-lint:
+lint: node_modules
 	@pnpm exec eslint . --ext .ts,.svelte
 
 # Format all files with Prettier
-fmt:
+fmt: node_modules
 	@pnpm exec prettier --write .
 
 # Run svelte-check for type errors
-check:
+check: node_modules
 	@pnpm exec svelte-check --tsconfig ./tsconfig.json
 
-# Run all pre-commit hooks manually against all files
-pre-commit-run:
+# Run all pre-commit hooks manually against all files. Depends on node_modules
+# because the eslint/prettier hooks resolve plugins from the local install.
+pre-commit-run: node_modules
 	@pre-commit run --all-files
 
 # Run semgrep with auto config
@@ -161,23 +199,21 @@ socket:
 
 help:
 	@echo ""
-	@echo "Development Commands"
-	@echo "--------------------"
+	@echo "Development"
+	@echo "-----------"
 	@echo "  setup            First-time setup: copies .env, installs deps, installs hooks, builds container"
 	@echo "  install          Install local dependencies"
-	@echo "  build            Build container and start"
+	@echo "  build            Build dev container and start"
 	@echo "  run              Start container"
 	@echo "  stop             Stop container"
 	@echo "  logs             View application logs"
 	@echo "  destroy          Destroy all containers, volumes, and images"
-	@echo "  clean            Delete all temp, build, and dist folders"
+	@echo "  clean            Delete all temp, build, and release artifacts"
 	@echo ""
-	@echo "Production"
-	@echo "----------"
-	@echo "  prod-build       Type-check + build production container image (\$$PROD_IMAGE)"
-	@echo "  prod-run         Run the production image on \$$PROD_PORT (default 3000)"
-	@echo "                     Override backend: make prod-run API_UPSTREAM=my-api:8080"
-	@echo "  prod-bundle      Build a static-asset tarball (go-tasks-ui-<version>.tar.gz)"
+	@echo "Release"
+	@echo "-------"
+	@echo "  prod-bundle      Build the release tarball locally (static bundle + Caddyfile)"
+	@echo "  release-check    Validate the release pipeline end-to-end (run before pushing a tag)"
 	@echo ""
 	@echo "Code Quality"
 	@echo "------------"

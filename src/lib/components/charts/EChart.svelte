@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { echarts } from '../../utils/echarts'
   import type { EChartsOption } from 'echarts'
+  import type { EChartsType } from 'echarts/core'
 
   interface Props {
     option: EChartsOption
@@ -11,18 +11,20 @@
   let { option, height = '300px' }: Props = $props()
 
   let container: HTMLDivElement
-  let chart: ReturnType<typeof echarts.init> | null = null
+  let chart: EChartsType | null = null
+  let observer: ResizeObserver | null = null
 
-  onMount(() => {
-    chart = echarts.init(container)
-    chart.setOption(option)
-
-    const observer = new ResizeObserver(() => chart?.resize())
+  // Dynamic import keeps echarts out of the main bundle — Vite emits a
+  // separate chunk that only loads the first time an EChart mounts (i.e. the
+  // first visit to the Charts route). echarts is ~600 kB before gzip, so this
+  // moves the bulk of the JS payload off the initial paint.
+  onMount(async () => {
+    const { echarts } = await import('../../utils/echarts')
+    const instance = echarts.init(container)
+    instance.setOption(option)
+    observer = new ResizeObserver(() => instance.resize())
     observer.observe(container)
-
-    return () => {
-      observer.disconnect()
-    }
+    chart = instance
   })
 
   $effect(() => {
@@ -32,6 +34,7 @@
   })
 
   onDestroy(() => {
+    observer?.disconnect()
     chart?.dispose()
   })
 </script>

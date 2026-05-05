@@ -1,12 +1,24 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
 
+  # Conventional Commits enforcement on the commit message itself. The release
+  # workflow groups changelog entries by the type prefix (feat:/fix:/perf:/...),
+  # so subject lines must follow the spec.
+  # NOTE: requires `pre-commit install --hook-type commit-msg` once per clone —
+  # `make pre-commit-install` does this for you.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  # Secrets detection
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:
@@ -14,6 +26,18 @@ repos:
 
   - repo: local
     hooks:
+      # Auto-install node_modules if missing. The eslint and prettier hooks
+      # below ESM-resolve plugins (@eslint/js, prettier-plugin-svelte) from the
+      # local install, so they fail noisily when deps are absent — typically
+      # right after `make clean` or a fresh clone. Runs before any tool hook
+      # so the rest of the pipeline always has a usable node_modules.
+      - id: ensure-node-deps
+        name: ensure node_modules
+        entry: sh -c 'test -d node_modules || pnpm install --frozen-lockfile'
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: eslint
         name: eslint
         entry: pnpm exec eslint --fix

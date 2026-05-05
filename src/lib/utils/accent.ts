@@ -43,7 +43,3 @@ const accentPalette: Record<AccentColour, AccentVars> = {
 export function accentToCssVars(colour: AccentColour): AccentVars {
   return accentPalette[colour]
 }
-
-export function getAccentHex(colour: AccentColour): string {
-  return accentPalette[colour]['--accent']
-}

@@ -23,10 +23,6 @@ export async function listInactiveCategories(limit?: number, offset?: number): P
   return request<Category[]>(`/api/v1/categories/inactive${query ? `?${query}` : ''}`)
 }
 
-export async function getCategory(id: string): Promise<Category> {
-  return request<Category>(`/api/v1/categories/${id}`)
-}
-
 export async function createCategory(data: CategoryRequest): Promise<Category> {
   return request<Category>('/api/v1/categories', {
     method: 'POST',

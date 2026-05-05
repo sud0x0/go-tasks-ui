@@ -15,6 +15,7 @@ A task and habit tracking web application built with Svelte 5 and TypeScript. Us
 - [Theming](#theming)
 - [Code Quality](#code-quality)
 - [Make Commands](#make-commands)
+- [Releases](#releases)
 - [TODO](#todo)
 
 ---
@@ -31,7 +32,7 @@ src/
   lib/
     api/                        — API integration layer
       client.ts                 — HTTP client with token refresh
-      auth.ts                   — login, register, refresh, logout
+      auth.ts                   — login, register, logout
       tasks.ts                  — task CRUD operations
       categories.ts             — category CRUD operations
       occurrences.ts            — occurrence listing and answers
@@ -44,15 +45,16 @@ src/
     components/                 — reusable UI components
       layout/
         TopBar.svelte           — navigation header, theme picker, user menu
-        NavItem.svelte          — navigation button with active state
       ui/
-        Button.svelte           — themed button
         Modal.svelte            — dialog with title and close
-        Table.svelte            — data table
-        Badge.svelte            — status labels
         ProgressBar.svelte      — visual progress indicator
         DateNav.svelte          — date navigation (prev/next/today)
         Avatar.svelte           — user avatar with initials
+      tasks/
+        TaskFormModal.svelte    — create / edit task dialog
+        TaskViewModal.svelte    — read-only task details dialog
+        RecurrenceFields.svelte — recurrence editor used inside the form
+        ConfirmDeleteModal.svelte — soft / permanent delete confirmation
       charts/
         EChart.svelte           — ECharts wrapper component
     types/
@@ -130,9 +132,11 @@ make build    # rebuild from scratch
 
 All configuration is read from environment variables. Copy `.env.example` to `.env` and fill in values before running.
 
-| Variable            | Required | Default                 | Description          |
-| ------------------- | -------- | ----------------------- | -------------------- |
-| `VITE_API_BASE_URL` | No       | `http://localhost:8080` | Backend API base URL |
+| Variable          | Required | Default                                | Description                                                           |
+| ----------------- | -------- | -------------------------------------- | --------------------------------------------------------------------- |
+| `VITE_API_TARGET` | No       | `http://host.containers.internal:8080` | Backend the Vite dev proxy forwards `/api` and `/health` requests to. |
+
+The browser-side client always talks to `/api` on the same origin — in dev that's the Vite proxy above; in production that's whatever the deployed reverse proxy (Caddy, by default) routes to the backend.
 
 Never commit `.env` — it is in `.gitignore`.
 
@@ -236,7 +240,7 @@ Svelte stores manage global state with localStorage persistence where appropriat
 
 The HTTP client (`lib/api/client.ts`) handles all backend communication:
 
-- Base URL from `VITE_API_BASE_URL` environment variable
+- Same-origin requests to `/api/*` (the dev proxy or the deployed reverse proxy routes to the backend)
 - Automatic `Authorization: Bearer <token>` header injection
 - Automatic token refresh on 401 responses
 - JSON parsing and error handling
@@ -303,12 +307,16 @@ make socket    # Socket.dev supply chain scan (requires socket CLI)
 Development
   setup            First-time setup: copies .env, installs deps, installs hooks, builds container
   install          Install local dependencies
-  build            Build container and start
+  build            Build dev container and start
   run              Start container
   stop             Stop container
   logs             View application logs
   destroy          Destroy all containers, volumes, and images
-  clean            Delete all temp, build, and dist folders
+  clean            Delete all temp, build, and release artifacts
+
+Release
+  prod-bundle      Build the release tarball locally (static bundle + Caddyfile)
+  release-check    Validate the release pipeline end-to-end (run before pushing a tag)
 
 Code Quality
   lint             Run ESLint on .ts and .svelte files
@@ -324,6 +332,31 @@ Typical workflow
   Fresh start: make destroy → make build
   Tidy up:     make clean
 ```
+
+---
+
+## Releases
+
+Tagged releases are cut by GitHub Actions on every `v*` tag push. The workflow at `.github/workflows/release.yml`:
+
+1. Builds the static bundle with `pnpm build`.
+2. Tars `dist/` together with the `Caddyfile` into `go-tasks-ui-<version>.tar.gz`.
+3. Generates an SPDX-JSON SBOM (`go-tasks-ui-<version>.sbom.json`) covering the JS dependency closure with [syft](https://github.com/anchore/syft).
+4. Computes `checksums.txt` (SHA-256) for the tarball and SBOM.
+5. Publishes a GitHub Release with the three assets attached.
+6. Generates SLSA Level 3 build provenance via [`slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator) and attaches it as a `*.intoto.jsonl` file.
+
+There is no container image in the release — consumers extract the tarball, set `SITE_ADDRESS`, `API_UPSTREAM`, and `ACME_EMAIL`, and run `caddy run --config Caddyfile`. Caddy provisions and renews TLS via Let's Encrypt automatically and 308-redirects all port-80 traffic to HTTPS.
+
+To validate the release pipeline locally before pushing a tag:
+
+```bash
+make release-check
+```
+
+This runs the same build → tar → syft → checksum steps the CI workflow does. Requires [syft](https://github.com/anchore/syft#installation) installed locally.
+
+Commit messages are required to follow [Conventional Commits](https://www.conventionalcommits.org/) — the `commit-msg` pre-commit hook enforces this. `make pre-commit-install` wires both the default `pre-commit` and the `commit-msg` hooks.
 
 ---
 

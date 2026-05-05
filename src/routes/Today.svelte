@@ -867,8 +867,7 @@
 
   .btn-answer,
   .btn-skip,
-  .btn-edit,
-  .btn-undo {
+  .btn-edit {
     width: 100%;
     padding: 0.25rem 0.625rem;
     border-radius: 4px;
@@ -905,14 +904,6 @@
 
   .btn-edit:hover {
     background: var(--bg-secondary);
-  }
-
-  .btn-undo {
-    border: 1px solid var(--border-primary);
-    background: var(--bg-primary);
-    color: var(--text-tertiary);
-    opacity: 0.6;
-    cursor: not-allowed;
   }
 
   .btn-undo-enabled {

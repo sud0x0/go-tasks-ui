@@ -1,0 +1,88 @@
+# go-tasks-ui — Caddyfile
+#
+# Ships in the release tarball alongside the static bundle. Caddy provisions
+# and renews TLS automatically via Let's Encrypt as long as the site address
+# resolves to this host on ports 80 and 443.
+#
+# Usage:
+#   1. Extract the tarball into the directory you want Caddy to serve from.
+#      The bundle's index.html / assets/ end up at the root of that dir.
+#   2. Set the two env vars below — SITE_ADDRESS and API_UPSTREAM — and run:
+#        caddy run --config Caddyfile
+#      (Or use a systemd unit / your process manager of choice.)
+#
+# Env vars:
+#   SITE_ADDRESS   — hostname clients reach this UI on, e.g. tasks.example.com.
+#                    Must be a real DNS name for ACME issuance.
+#   API_UPSTREAM   — host:port of the go-tasks-api backend, e.g. api.internal:8080.
+#   SITE_ROOT      — directory containing the unpacked static bundle. Defaults
+#                    to ./dist relative to wherever Caddy is launched from.
+#   ACME_EMAIL     — contact email for the Let's Encrypt account.
+#
+# HTTP on :80 is reserved for two things only: the ACME HTTP-01 challenge
+# (handled implicitly by Caddy on the issuance path) and a permanent 308
+# redirect to the HTTPS site below. There is no plain-HTTP application.
+
+{
+	email {$ACME_EMAIL}
+	# Force the modern TLS profile. ACME defaults to Let's Encrypt.
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+# Explicit HTTP listener that 308-redirects every request to HTTPS. Caddy
+# would do this automatically for any hostname site, but pinning the redirect
+# in config keeps the behaviour visible and audit-friendly.
+http://{$SITE_ADDRESS} {
+	redir https://{host}{uri} permanent
+}
+
+{$SITE_ADDRESS} {
+	root * {$SITE_ROOT:./dist}
+	encode zstd gzip
+
+	# TLS is on by default for any site address with a hostname; this block
+	# pins the minimum version so we never downgrade to TLS 1.1.
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
+	# Security headers. HSTS is only safe once you're sure HTTPS is sticking —
+	# it's set with a long max-age + preload because this site is HTTPS-only.
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options    "nosniff"
+		X-Frame-Options           "SAMEORIGIN"
+		Referrer-Policy           "strict-origin-when-cross-origin"
+		Permissions-Policy        "geolocation=(), microphone=(), camera=()"
+		# Don't leak the Caddy version.
+		-Server
+	}
+
+	# Reverse-proxy API + health to the backend. Header rewrites mirror what
+	# the previous nginx config did so the backend sees the original client.
+	@api path /api/* /health
+	handle @api {
+		reverse_proxy {$API_UPSTREAM} {
+			header_up Host               {host}
+			header_up X-Real-IP          {remote_host}
+			header_up X-Forwarded-For    {remote_host}
+			header_up X-Forwarded-Proto  {scheme}
+		}
+	}
+
+	# Long-lived caching for fingerprinted assets emitted by Vite.
+	@assets path *.js *.css *.woff *.woff2 *.png *.svg *.ico
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# SPA fallback — anything that isn't a real file falls through to index.html.
+	handle {
+		header Cache-Control "no-store, no-cache, must-revalidate"
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,35 +1,28 @@
-name: Release
+name: release
 
 on:
   push:
     tags:
       - 'v*'
 
-# Workflow-level default: read-only. Each job escalates only what it needs.
+# Default to read-only at the workflow level. Each job widens permissions
+# only for what it needs.
 permissions:
   contents: read
 
 jobs:
-  # ============================================================================
-  # release: build static bundle + multi-arch container, sign image, attest SBOM,
-  # publish GitHub Release, and emit subjects for SLSA provenance.
-  # ============================================================================
   release:
     runs-on: ubuntu-latest
-
     permissions:
-      contents: write # create the GitHub Release + upload tarball
-      packages: write # push the container image to ghcr.io
-      id-token: write # cosign keyless signing via the OIDC token
-
+      contents: write   # publish GitHub Releases
+      id-token: write   # OIDC for SLSA provenance signing
     outputs:
-      hashes: ${{ steps.hashes.outputs.hashes }}
-      image: ${{ steps.image-info.outputs.image }}
-      digest: ${{ steps.image-info.outputs.digest }}
-
+      hashes: ${{ steps.subjects.outputs.hashes }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so the changelog can compare against the previous tag
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -51,125 +44,65 @@ jobs:
       - name: Build static bundle
         run: pnpm build
 
-      - name: Package static bundle
+      # Bundle the static assets together with the Caddyfile so the tarball is
+      # drop-in deployable: extract, set SITE_ADDRESS / API_UPSTREAM, run caddy.
+      - name: Package release tarball
         id: bundle
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           TARBALL="go-tasks-ui-${VERSION}.tar.gz"
-          tar -czf "$TARBALL" -C dist .
+          STAGE="go-tasks-ui-${VERSION}"
+          mkdir -p "$STAGE/dist"
+          cp -R dist/. "$STAGE/dist/"
+          cp Caddyfile "$STAGE/"
+          tar -czf "$TARBALL" "$STAGE"
           {
             echo "version=$VERSION"
             echo "tarball=$TARBALL"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Derive image tags
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
-
-      - name: Build and push container
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: container.prod
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v4.1.1
-        with:
-          cosign-release: 'v3.0.6'
-
+      # SBOM of the production dependency closure. Run against the project
+      # rather than the tarball so syft sees package.json + the lockfile and
+      # can attribute every JS package shipped in the bundle.
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0.22.0
 
-      - name: Resolve image and digest
-        id: image-info
+      - name: Generate SBOM
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          DIGEST="${{ steps.build.outputs.digest }}"
-          if [ -z "$DIGEST" ]; then
-            echo "::error title=Missing digest::build-push-action did not return a digest output. Cosign signing and SLSA container provenance both require it."
-            exit 1
-          fi
-          if [ -z "$IMAGE" ]; then
-            echo "::error title=Missing image::failed to derive image name from GITHUB_REPOSITORY"
-            exit 1
-          fi
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-
-      - name: Sign container image
-        env:
-          IMAGE: ${{ steps.image-info.outputs.image }}
-          DIGEST: ${{ steps.image-info.outputs.digest }}
-        run: |
-          cosign sign --yes "${IMAGE}@${DIGEST}"
-
-      - name: Generate image SBOM
-        env:
-          IMAGE: ${{ steps.image-info.outputs.image }}
-          DIGEST: ${{ steps.image-info.outputs.digest }}
-        run: |
-          syft "${IMAGE}@${DIGEST}" -o spdx-json=image.sbom.spdx.json
-
-      - name: Attest SBOM
-        env:
-          IMAGE: ${{ steps.image-info.outputs.image }}
-          DIGEST: ${{ steps.image-info.outputs.digest }}
-        run: |
-          cosign attest --yes --type spdxjson \
-            --predicate image.sbom.spdx.json \
-            "${IMAGE}@${DIGEST}"
-
-      - name: Copy SBOM for release upload
-        run: |
-          cp image.sbom.spdx.json go-tasks-ui-${{ steps.bundle.outputs.version }}.image.sbom.spdx.json
-
-      - name: Compute SLSA subjects for tarball
-        id: hashes
-        run: |
-          set -euo pipefail
-          TARBALL="${{ steps.bundle.outputs.tarball }}"
-          if [ ! -f "$TARBALL" ]; then
-            echo "::error title=Tarball missing::expected $TARBALL but it does not exist on disk"
-            exit 1
-          fi
-          HASHES=$(sha256sum "$TARBALL" | base64 -w0)
-          if [ -z "$HASHES" ]; then
-            echo "::error title=Empty hashes::sha256sum produced no output for $TARBALL"
-            exit 1
-          fi
-          echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
+          VERSION="${{ steps.bundle.outputs.version }}"
+          syft scan dir:. \
+            --source-name "go-tasks-ui" \
+            --source-version "$VERSION" \
+            -o spdx-json="go-tasks-ui-${VERSION}.sbom.json"
 
       - name: Generate checksums
         run: |
-          sha256sum ${{ steps.bundle.outputs.tarball }} > checksums.txt
+          set -euo pipefail
+          VERSION="${{ steps.bundle.outputs.version }}"
+          sha256sum \
+            "${{ steps.bundle.outputs.tarball }}" \
+            "go-tasks-ui-${VERSION}.sbom.json" \
+            > checksums.txt
+
+      # SLSA generic-generator subject format: lines of "<sha256>  <filename>",
+      # base64-encoded. Emit subjects for the tarball *and* the SBOM so each
+      # asset gets its own provenance entry in the published intoto file.
+      - name: Compute SLSA subjects
+        id: subjects
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.bundle.outputs.version }}"
+          HASHES=$(sha256sum \
+            "${{ steps.bundle.outputs.tarball }}" \
+            "go-tasks-ui-${VERSION}.sbom.json" \
+            | base64 -w0)
+          if [ -z "$HASHES" ]; then
+            echo "::error title=Empty hashes::sha256sum produced no output"
+            exit 1
+          fi
+          echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -177,57 +110,39 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             ${{ steps.bundle.outputs.tarball }}
+            go-tasks-ui-${{ steps.bundle.outputs.version }}.sbom.json
             checksums.txt
-            go-tasks-ui-${{ steps.bundle.outputs.version }}.image.sbom.spdx.json
           body: |
             ## go-tasks-ui ${{ github.ref_name }}
 
-            **Container image (recommended):** `ghcr.io/sud0x0/go-tasks-ui:${{ steps.bundle.outputs.version }}` — multi-arch (`linux/amd64`, `linux/arm64`).
-
-            Static bundle is attached below.
-
-            ## Run the container
+            Static bundle of the production build. Extract the tarball, set the
+            two env vars below, and run Caddy from the unpacked directory:
 
             ```bash
-            docker pull ghcr.io/sud0x0/go-tasks-ui:${{ steps.bundle.outputs.version }}
-            docker run --rm -p 3000:80 \
-                -e API_UPSTREAM=your-api-host:8080 \
-                ghcr.io/sud0x0/go-tasks-ui:${{ steps.bundle.outputs.version }}
+            tar -xzf go-tasks-ui-${{ steps.bundle.outputs.version }}.tar.gz
+            cd go-tasks-ui-${{ steps.bundle.outputs.version }}
+            export SITE_ADDRESS=tasks.example.com
+            export API_UPSTREAM=api.internal:8080
+            export ACME_EMAIL=ops@example.com
+            caddy run --config Caddyfile
             ```
 
-            See the [README](https://github.com/sud0x0/go-tasks-ui#getting-started) for required environment variables.
+            Caddy provisions and renews TLS via Let's Encrypt automatically as
+            long as `SITE_ADDRESS` resolves to the host on ports 80 + 443.
 
-            Verify the bundle download with `sha256sum -c checksums.txt`.
+            The SBOM (`go-tasks-ui-${{ steps.bundle.outputs.version }}.sbom.json`,
+            SPDX-JSON) covers the JavaScript dependency closure shipped in the
+            bundle. Verify downloads with `sha256sum -c checksums.txt`.
 
-  # ============================================================================
-  # binary-provenance: SLSA Level 3 provenance for the tarball, attached to the
-  # GitHub Release as an additional asset.
-  # ============================================================================
+  # SLSA Level 3 build provenance for the tarball and SBOM. Attaches a
+  # `<release>.intoto.jsonl` file to the GitHub Release.
   binary-provenance:
     needs: [release]
     permissions:
-      actions: read # read workflow metadata for provenance
-      id-token: write # OIDC for SLSA generator signing
-      contents: write # upload provenance asset to the GitHub Release
+      actions: read       # read workflow run metadata
+      id-token: write     # OIDC for the SLSA generator's signer
+      contents: write     # upload the provenance file to the release
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
       upload-assets: true
-
-  # ============================================================================
-  # container-provenance: SLSA Level 3 provenance for the container image,
-  # pushed to the registry as an OCI attestation alongside the image.
-  # ============================================================================
-  container-provenance:
-    needs: [release]
-    permissions:
-      actions: read # read workflow metadata for provenance
-      id-token: write # OIDC for SLSA generator signing
-      packages: write # push provenance attestation to ghcr.io
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
-    with:
-      image: ${{ needs.release.outputs.image }}
-      digest: ${{ needs.release.outputs.digest }}
-      registry-username: ${{ github.actor }}
-    secrets:
-      registry-password: ${{ secrets.GITHUB_TOKEN }}

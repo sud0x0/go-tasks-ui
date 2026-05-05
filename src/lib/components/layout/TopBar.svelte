@@ -83,31 +83,40 @@
     </button>
 
     {#if showProfilePanel}
-      <div class="profile-panel" onclick={(e) => e.stopPropagation()}>
+      <div class="profile-panel">
         <div class="profile-header">
           <Avatar name={userName} size="lg" />
           <span class="profile-name">{userName}</span>
         </div>
 
         <div class="profile-section">
-          <span class="section-label">Theme</span>
-          <button class="theme-toggle">
-            <span
+          <span class="section-label" id="theme-label">Theme</span>
+          <div class="theme-toggle" role="group" aria-labelledby="theme-label">
+            <button
+              type="button"
               class="theme-option"
               class:active={$theme === 'light'}
-              onclick={() => theme.set('light')}>Light</span
+              onclick={() => theme.set('light')}
             >
-            <span
+              Light
+            </button>
+            <button
+              type="button"
               class="theme-option"
               class:active={$theme === 'dark'}
-              onclick={() => theme.set('dark')}>Dark</span
+              onclick={() => theme.set('dark')}
             >
-            <span
+              Dark
+            </button>
+            <button
+              type="button"
               class="theme-option"
               class:active={$theme === 'sepia'}
-              onclick={() => theme.set('sepia')}>Sepia</span
+              onclick={() => theme.set('sepia')}
             >
-          </button>
+              Sepia
+            </button>
+          </div>
         </div>
 
         <div class="profile-section">
@@ -285,10 +294,8 @@
     display: flex;
     width: 100%;
     background: var(--bg-tertiary);
-    border: none;
     border-radius: 6px;
     padding: 2px;
-    cursor: pointer;
   }
 
   .theme-option {
@@ -297,7 +304,10 @@
     font-size: 0.8125rem;
     font-weight: 500;
     color: var(--text-secondary);
+    background: none;
+    border: none;
     border-radius: 4px;
+    cursor: pointer;
     transition:
       background-color 0.15s,
       color 0.15s;
