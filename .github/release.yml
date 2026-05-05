@@ -1,0 +1,70 @@
+# GitHub auto-generated release notes config. Read whenever the release API
+# is called with `generate_release_notes: true` — see .github/workflows/release.yml.
+#
+# Each merged PR is matched against the categories below in order; the first
+# label-match wins, so put the most specific categories first. Anything that
+# doesn't match a category lands in "Other Changes" via the `*` catch-all.
+#
+# This mirrors the Conventional Commit groups go-tasks-api ships via
+# GoReleaser, so users reading the two changelogs see the same shape. Tag
+# PRs with the matching label when you open them.
+
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - duplicate
+      - invalid
+      - wontfix
+    authors:
+      - dependabot
+      - github-actions
+
+  categories:
+    - title: Breaking Changes
+      labels:
+        - breaking-change
+        - breaking
+
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+        - feat
+
+    - title: Bug Fixes
+      labels:
+        - bug
+        - bugfix
+        - fix
+
+    - title: Performance
+      labels:
+        - performance
+        - perf
+
+    - title: Refactors
+      labels:
+        - refactor
+
+    - title: Reverts
+      labels:
+        - revert
+
+    - title: Security
+      labels:
+        - security
+
+    - title: Dependencies
+      labels:
+        - dependencies
+        - deps
+
+    - title: Documentation
+      labels:
+        - documentation
+        - docs
+
+    - title: Other Changes
+      labels:
+        - "*"

@@ -108,6 +108,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # Append GitHub's auto-generated "What's Changed" + "Full Changelog"
+          # section to the static body below. Generated server-side from PRs
+          # merged since the previous tag — no commit-history checkout needed.
+          generate_release_notes: true
           files: |
             ${{ steps.bundle.outputs.tarball }}
             go-tasks-ui-${{ steps.bundle.outputs.version }}.sbom.json
