@@ -5,9 +5,10 @@
 # resolves to this host on ports 80 and 443.
 #
 # Usage:
-#   1. Extract the tarball into the directory you want Caddy to serve from.
-#      The bundle's index.html / assets/ end up at the root of that dir.
-#   2. Set the two env vars below — SITE_ADDRESS and API_UPSTREAM — and run:
+#   1. Extract the tarball wherever you want it to live, e.g.
+#        tar -xzf go-tasks-ui-<version>.tar.gz -C /var/www/go-tasks-ui --strip-components=1
+#      The Caddyfile sits next to index.html / assets/ in that directory.
+#   2. Set the env vars below and run from the same directory:
 #        caddy run --config Caddyfile
 #      (Or use a systemd unit / your process manager of choice.)
 #
@@ -15,13 +16,21 @@
 #   SITE_ADDRESS   — hostname clients reach this UI on, e.g. tasks.example.com.
 #                    Must be a real DNS name for ACME issuance.
 #   API_UPSTREAM   — host:port of the go-tasks-api backend, e.g. api.internal:8080.
-#   SITE_ROOT      — directory containing the unpacked static bundle. Defaults
-#                    to ./dist relative to wherever Caddy is launched from.
+#   SITE_ROOT      — document root. Defaults to "." (the directory holding this
+#                    Caddyfile). Override only if you keep the bundle elsewhere
+#                    or are testing from the source repo (set to ./dist).
 #   ACME_EMAIL     — contact email for the Let's Encrypt account.
 #
 # HTTP on :80 is reserved for two things only: the ACME HTTP-01 challenge
 # (handled implicitly by Caddy on the issuance path) and a permanent 308
 # redirect to the HTTPS site below. There is no plain-HTTP application.
+#
+# Homeserver / LAN-only deployments (.local hostnames, IP-only access, or any
+# host Let's Encrypt can't reach over port 80): replace the `tls { ... }`
+# block with `tls internal` and delete the `http://{$SITE_ADDRESS}` redir
+# block above. Caddy will issue from its local CA instead of ACME — run
+# `caddy trust` on each client device to install the local root cert. See
+# the README "Releases" section for the full diff.
 
 {
 	email {$ACME_EMAIL}
@@ -39,7 +48,7 @@ http://{$SITE_ADDRESS} {
 }
 
 {$SITE_ADDRESS} {
-	root * {$SITE_ROOT:./dist}
+	root * {$SITE_ROOT:.}
 	encode zstd gzip
 
 	# TLS is on by default for any site address with a hostname; this block
@@ -76,13 +85,19 @@ http://{$SITE_ADDRESS} {
 	@assets path *.js *.css *.woff *.woff2 *.png *.svg *.ico
 	handle @assets {
 		header Cache-Control "public, max-age=31536000, immutable"
-		file_server
+		file_server {
+			# Serve the static bundle but don't ever ship the Caddyfile itself —
+			# it sits in the same directory now that the tarball is flat.
+			hide Caddyfile
+		}
 	}
 
 	# SPA fallback — anything that isn't a real file falls through to index.html.
 	handle {
 		header Cache-Control "no-store, no-cache, must-revalidate"
 		try_files {path} /index.html
-		file_server
+		file_server {
+			hide Caddyfile
+		}
 	}
 }

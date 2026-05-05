@@ -44,8 +44,10 @@ jobs:
       - name: Build static bundle
         run: pnpm build
 
-      # Bundle the static assets together with the Caddyfile so the tarball is
-      # drop-in deployable: extract, set SITE_ADDRESS / API_UPSTREAM, run caddy.
+      # Bundle the static assets together with the Caddyfile in a flat layout —
+      # the version-named directory contains the Caddyfile and the index.html /
+      # assets/ siblings, so extracting with `--strip-components=1` lands a
+      # ready-to-serve directory with no inner `dist/` wrapper.
       - name: Package release tarball
         id: bundle
         run: |
@@ -53,8 +55,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           TARBALL="go-tasks-ui-${VERSION}.tar.gz"
           STAGE="go-tasks-ui-${VERSION}"
-          mkdir -p "$STAGE/dist"
-          cp -R dist/. "$STAGE/dist/"
+          mkdir -p "$STAGE"
+          cp -R dist/. "$STAGE/"
           cp Caddyfile "$STAGE/"
           tar -czf "$TARBALL" "$STAGE"
           {
@@ -119,12 +121,40 @@ jobs:
           body: |
             ## go-tasks-ui ${{ github.ref_name }}
 
-            Static bundle of the production build. Extract the tarball, set the
-            two env vars below, and run Caddy from the unpacked directory:
+            Static bundle of the production build. The tarball lays out flat —
+            the version-named directory contains the `Caddyfile` and the
+            `index.html` / `assets/` siblings, no inner `dist/` wrapper.
+
+            ## Verify the download
+
+            Always do this before extracting on a production host. The release
+            ships a `checksums.txt` and a `*.intoto.jsonl` SLSA Level 3
+            provenance file; both are signed by GitHub's OIDC identity.
 
             ```bash
-            tar -xzf go-tasks-ui-${{ steps.bundle.outputs.version }}.tar.gz
-            cd go-tasks-ui-${{ steps.bundle.outputs.version }}
+            VERSION=${{ steps.bundle.outputs.version }}
+
+            # 1. SHA-256 (cheap, catches corrupted downloads / mirrors)
+            sha256sum -c checksums.txt
+
+            # 2. SLSA provenance (expensive, catches tampered tarballs)
+            #    Install: go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
+            slsa-verifier verify-artifact \
+              --provenance-path go-tasks-ui-$VERSION.intoto.jsonl \
+              --source-uri github.com/${{ github.repository }} \
+              --source-tag ${{ github.ref_name }} \
+              go-tasks-ui-$VERSION.tar.gz
+            ```
+
+            ## Run the site
+
+            ```bash
+            VERSION=${{ steps.bundle.outputs.version }}
+            mkdir -p /var/www/go-tasks-ui
+            tar -xzf go-tasks-ui-$VERSION.tar.gz \
+                -C /var/www/go-tasks-ui --strip-components=1
+            cd /var/www/go-tasks-ui
+
             export SITE_ADDRESS=tasks.example.com
             export API_UPSTREAM=api.internal:8080
             export ACME_EMAIL=ops@example.com
@@ -132,11 +162,13 @@ jobs:
             ```
 
             Caddy provisions and renews TLS via Let's Encrypt automatically as
-            long as `SITE_ADDRESS` resolves to the host on ports 80 + 443.
+            long as `SITE_ADDRESS` resolves to the host on ports 80 + 443. For
+            homeserver / `.local` deployments, swap the `tls { ... }` block
+            for `tls internal` — see the [README's Releases section](https://github.com/${{ github.repository }}#releases) for the full diff.
 
             The SBOM (`go-tasks-ui-${{ steps.bundle.outputs.version }}.sbom.json`,
             SPDX-JSON) covers the JavaScript dependency closure shipped in the
-            bundle. Verify downloads with `sha256sum -c checksums.txt`.
+            bundle.
 
   # SLSA Level 3 build provenance for the tarball and SBOM. Attaches a
   # `<release>.intoto.jsonl` file to the GitHub Release.

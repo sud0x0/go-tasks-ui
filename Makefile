@@ -128,8 +128,8 @@ prod-bundle:
 	@pnpm build
 	@STAGE=go-tasks-ui-$(VERSION); \
 	rm -rf "$$STAGE" "$$STAGE.tar.gz"; \
-	mkdir -p "$$STAGE/dist"; \
-	cp -R dist/. "$$STAGE/dist/"; \
+	mkdir -p "$$STAGE"; \
+	cp -R dist/. "$$STAGE/"; \
 	cp Caddyfile "$$STAGE/"; \
 	tar -czf "$$STAGE.tar.gz" "$$STAGE"; \
 	rm -rf "$$STAGE"; \

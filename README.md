@@ -348,13 +348,75 @@ Typical workflow
 Tagged releases are cut by GitHub Actions on every `v*` tag push. The workflow at `.github/workflows/release.yml`:
 
 1. Builds the static bundle with `pnpm build`.
-2. Tars `dist/` together with the `Caddyfile` into `go-tasks-ui-<version>.tar.gz`.
+2. Stages the bundle together with the `Caddyfile` in a flat layout (no inner `dist/`) and tars it as `go-tasks-ui-<version>.tar.gz`.
 3. Generates an SPDX-JSON SBOM (`go-tasks-ui-<version>.sbom.json`) covering the JS dependency closure with [syft](https://github.com/anchore/syft).
 4. Computes `checksums.txt` (SHA-256) for the tarball and SBOM.
-5. Publishes a GitHub Release with the three assets attached.
+5. Publishes a GitHub Release with the three assets attached, plus auto-generated release notes grouped by PR label (`.github/release.yml`).
 6. Generates SLSA Level 3 build provenance via [`slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator) and attaches it as a `*.intoto.jsonl` file.
 
 There is no container image in the release — consumers extract the tarball, set `SITE_ADDRESS`, `API_UPSTREAM`, and `ACME_EMAIL`, and run `caddy run --config Caddyfile`. Caddy provisions and renews TLS via Let's Encrypt automatically and 308-redirects all port-80 traffic to HTTPS.
+
+### Tarball layout
+
+```
+go-tasks-ui-<version>/
+  Caddyfile
+  index.html
+  assets/
+    index-*.js
+    index-*.css
+    echarts-*.js   ← lazy-loaded chunk
+```
+
+The Caddyfile sits in the same directory as the document root; `file_server` is configured with `hide Caddyfile` so it's never served. To extract straight into a deployment directory without keeping the version-named wrapper:
+
+```bash
+tar -xzf go-tasks-ui-<version>.tar.gz -C /var/www/go-tasks-ui --strip-components=1
+```
+
+### Verifying a download
+
+Every release ships `checksums.txt` and a `*.intoto.jsonl` SLSA provenance file. **Verify before extracting on a production host:**
+
+```bash
+VERSION=1.0.0
+
+# 1. SHA-256 (catches corrupted downloads / mirror tampering)
+sha256sum -c checksums.txt
+
+# 2. SLSA provenance (catches malicious rebuilds outside this repo's CI)
+#    Install once: go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
+slsa-verifier verify-artifact \
+  --provenance-path go-tasks-ui-$VERSION.intoto.jsonl \
+  --source-uri github.com/sud0x0/go-tasks-ui \
+  --source-tag v$VERSION \
+  go-tasks-ui-$VERSION.tar.gz
+```
+
+The provenance check is keyless (Sigstore OIDC) and confirms the tarball was built by this repo's GitHub Actions workflow, on the named tag — not on any local machine or fork.
+
+### Homeserver / LAN-only deployments
+
+Hostnames like `home.local`, raw IPs, or any host Let's Encrypt can't reach over port 80 cannot get a public ACME certificate. Caddy will fall back to issuing from its **internal CA** instead. To explicitly pin that, swap the TLS section in the shipped Caddyfile:
+
+```diff
+-http://{$SITE_ADDRESS} {
+-    redir https://{host}{uri} permanent
+-}
+-
+ {$SITE_ADDRESS} {
+     root * {$SITE_ROOT:.}
+     encode zstd gzip
+
+-    tls {
+-        protocols tls1.2 tls1.3
+-    }
++    tls internal
+```
+
+Then run `caddy trust` on each client device to install the local CA root cert into the OS/browser trust store (otherwise browsers show the "not trusted" warning). For a permanently-trusted cert without that hassle, use a real public DNS name (e.g. `tasks.yourdomain.com`) pointing at your LAN IP and switch to the **DNS-01** ACME challenge — Caddy needs a [DNS-provider plugin](https://caddyserver.com/docs/modules/) for your registrar.
+
+### Local validation
 
 To validate the release pipeline locally before pushing a tag:
 
@@ -364,7 +426,9 @@ make release-check
 
 This runs the same build → tar → syft → checksum steps the CI workflow does. Requires [syft](https://github.com/anchore/syft#installation) installed locally.
 
-Commit messages are required to follow [Conventional Commits](https://www.conventionalcommits.org/) — the `commit-msg` pre-commit hook enforces this. `make pre-commit-install` wires both the default `pre-commit` and the `commit-msg` hooks.
+### Commit conventions
+
+Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) — the `commit-msg` pre-commit hook enforces this. `make pre-commit-install` wires both the default `pre-commit` and the `commit-msg` hooks.
 
 ---
 
